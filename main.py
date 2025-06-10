@@ -20,6 +20,18 @@ from sentence_transformers import SentenceTransformer
 from passlib.context import CryptContext
 from jose import jwt
 from pydantic import BaseModel
+from fastapi.middleware.cors import CORSMiddleware
+
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=[
+        "https://hopeful-education-production.up.railway.app",  # ← 프론트 railway 주소
+        "http://localhost:5173",  # 개발용
+    ],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
 
 # ====== 설정 ======
 SECRET_KEY = "wjddlsdnr8832"   # 실제 서비스 시 더 길고 랜덤하게!
