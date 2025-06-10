@@ -184,7 +184,15 @@ def semantic_search_api(query: str):
     except Exception as e:
         print("❌ 문맥 검색 중 오류:", e)
         return {"error": str(e)}
-
+@app.get("/images/")
+def get_image_list():
+    image_folder = "uploaded_images"  # 실제 업로드 폴더 경로 맞게 수정
+    files = []
+    for fname in os.listdir(image_folder):
+        if fname.lower().endswith(('.png', '.jpg', '.jpeg', '.gif')):
+            files.append(f"{image_folder}/{fname}")
+    return {"images": files}
+    
 @app.post("/highlighted_image/")
 async def highlight_image(request: Request):
     data = await request.json()
