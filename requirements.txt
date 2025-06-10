@@ -10,3 +10,4 @@ python-dotenv
 google-cloud-vision
 sentence-transformers
 faiss-cpu
+python-multipart
