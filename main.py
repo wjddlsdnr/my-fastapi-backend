@@ -8,14 +8,9 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from sqlalchemy.orm import Session
-import cv2
-from io import BytesIO
-import easyocr
 from ocr import extract_text_from_image
-
 from database import SessionLocal, engine
 from models import Base, OCRSentence
-from ocr import extract_text_from_image
 from semantic_search import (
     get_all_texts,
     build_faiss_index,
@@ -23,12 +18,9 @@ from semantic_search import (
     remove_faiss_ids,
 )
 from sentence_transformers import SentenceTransformer
+
 model = SentenceTransformer("BAAI/bge-m3")
-
-
-
-models.Base.metadata.create_all(bind=engine)
-
+Base.metadata.create_all(bind=engine)
 app = FastAPI()
 
 UPLOAD_DIR = "uploads"
@@ -36,7 +28,10 @@ os.makedirs(UPLOAD_DIR, exist_ok=True)
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["http://localhost:5173"],
+    allow_origins=[
+        "http://localhost:5173",  # 개발용
+        "https://your-frontend.onrender.com"  # 실제 배포용 프론트 주소로 변경
+    ],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -72,7 +67,6 @@ async def upload_image(file: UploadFile = File(...), db: Session = Depends(get_d
         save_path = os.path.join(UPLOAD_DIR, file.filename)
         with open(save_path, "wb") as f:
             f.write(contents)
-
         raw_result = extract_text_from_image(contents)
         print("📦 OCR 결과 (원본):", raw_result)
 
@@ -91,7 +85,6 @@ async def upload_image(file: UploadFile = File(...), db: Session = Depends(get_d
         if not sentences:
             return {"message": "문장이 추출되지 않음", "uploaded": file.filename}
 
-        # DB 및 FAISS id 최신화
         texts = get_all_texts()
         faiss_index, indexed_texts, embeddings = build_faiss_index(texts)
 
@@ -111,7 +104,6 @@ async def upload_image(file: UploadFile = File(...), db: Session = Depends(get_d
         db.commit()
         print(f"✅ 총 {len(sentences)}개 문장 저장 완료")
 
-        # 업로드 후 전체 인덱스 재구축
         texts = get_all_texts()
         faiss_index, indexed_texts, embeddings = build_faiss_index(texts)
         print("✅ FAISS 인덱스 전체 재구축 완료")
@@ -131,32 +123,24 @@ async def upload_image(file: UploadFile = File(...), db: Session = Depends(get_d
 @app.delete("/delete_image/{filename:path}")
 def delete_image(filename: str = Path(...), db: Session = Depends(get_db)):
     global faiss_index, indexed_texts, embeddings
-
     safe_filename = os.path.basename(filename)
     file_path = os.path.join(UPLOAD_DIR, safe_filename)
-
     if not os.path.exists(file_path):
         raise HTTPException(status_code=404, detail="이미지 파일이 존재하지 않습니다.")
 
     try:
         os.chmod(file_path, stat.S_IWRITE)
         os.remove(file_path)
-
         sentences_to_delete = db.query(OCRSentence).filter(OCRSentence.image_path == file_path).all()
         faiss_ids = [s.faiss_id for s in sentences_to_delete]
         remove_faiss_ids(faiss_index, faiss_ids)
-
         for s in sentences_to_delete:
             db.delete(s)
         db.commit()
-
-        # 인덱스 전체 재구축
         texts = get_all_texts()
         faiss_index, indexed_texts, embeddings = build_faiss_index(texts)
         print("✅ 이미지 및 관련 OCR문장, 인덱스 삭제 완료")
-
         return JSONResponse(content={"message": "삭제 완료"}, status_code=200)
-
     except Exception as e:
         import traceback
         traceback.print_exc()
@@ -166,7 +150,6 @@ def delete_image(filename: str = Path(...), db: Session = Depends(get_db)):
 @app.get("/semantic_search/")
 def semantic_search_api(query: str):
     global faiss_index, indexed_texts, embeddings
-
     if faiss_index is None or not indexed_texts:
         return {"error": "FAISS 인덱스가 초기화되지 않았거나 문장이 없음"}
 
@@ -174,11 +157,9 @@ def semantic_search_api(query: str):
         query_vec = model.encode([query], convert_to_numpy=True, normalize_embeddings=True)
         if query_vec.ndim == 1:
             query_vec = np.expand_dims(query_vec, axis=0)
-
         top_k = 10
-        threshold = 0.45  # Ko-LLM-Embedding에서 추천되는 임계값 (테스트하며 조정)
+        threshold = 0.45
         D, I = faiss_index.search(query_vec.astype("float32"), top_k)
-
         from collections import defaultdict
         results_dict = defaultdict(list)
         for idx, score in zip(I[0], D[0]):
@@ -192,7 +173,6 @@ def semantic_search_api(query: str):
                     "original": matched_sentence,
                     "similarity": float(score)
                 })
-
         results = []
         for image_path, matched_sentences in results_dict.items():
             if matched_sentences:
@@ -200,13 +180,10 @@ def semantic_search_api(query: str):
                     "image_path": image_path,
                     "matches": matched_sentences
                 })
-
         return results
-
     except Exception as e:
         print("❌ 문맥 검색 중 오류:", e)
         return {"error": str(e)}
-
 
 @app.post("/highlighted_image/")
 async def highlight_image(request: Request):
@@ -215,22 +192,17 @@ async def highlight_image(request: Request):
     keyword = data.get("query")
     if not image_path or not keyword:
         return {"error": "image_path와 query는 필수입니다."}
-
-    full_path = os.path.join("backend", image_path) if not os.path.exists(image_path) else image_path
+    full_path = os.path.join(image_path) if os.path.exists(image_path) else os.path.join("backend", image_path)
     if not os.path.exists(full_path):
         return {"error": f"이미지 파일을 찾을 수 없습니다: {full_path}"}
-
     import easyocr
     import cv2
     from io import BytesIO
-
     image = cv2.imread(full_path)
     if image is None:
         return {"error": "이미지를 읽는 데 실패했습니다."}
-
     reader = easyocr.Reader(['ko', 'en'])
     results = reader.readtext(image)
-
     found = False
     for (bbox, text, conf) in results:
         if keyword.lower() in text.lower():
@@ -240,17 +212,10 @@ async def highlight_image(request: Request):
             cv2.rectangle(image, top_left, bottom_right, (0, 0, 255), 3)
             cv2.putText(image, text, (top_left[0], top_left[1] - 10),
                         cv2.FONT_HERSHEY_SIMPLEX, 0.8, (0, 0, 255), 2)
-
-    if not found:
-        # (옵션) 찾지 못했을 때 안내문구 추가 가능
-        pass
-
     _, buffer = cv2.imencode('.png', image)
     io_buf = BytesIO(buffer)
     return StreamingResponse(io_buf, media_type="image/png")
 
-
-# 서버 시작시 자동 인덱스 초기화
 @app.on_event("startup")
 def load_faiss_index():
     global faiss_index, indexed_texts, embeddings

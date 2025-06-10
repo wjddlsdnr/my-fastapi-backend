@@ -7,7 +7,6 @@ from models import OCRSentence
 
 model = SentenceTransformer("BAAI/bge-m3")
 
-
 def get_all_texts():
     db = SessionLocal()
     data = db.query(OCRSentence).all()
@@ -27,7 +26,6 @@ def build_faiss_index(text_tuples):
     dim = embeddings.shape[1]
     index = faiss.IndexIDMap(faiss.IndexFlatIP(dim))
     index.add_with_ids(embeddings, np.array(ids, dtype=np.int64))
-    # (문장, 이미지경로)로 저장!
     return index, list(zip(sentences, image_paths)), embeddings
 
 def highlight_keyword(text: str, keyword: str) -> str:

@@ -1,0 +1,12 @@
+fastapi
+uvicorn
+sqlalchemy
+pydantic
+opencv-python
+numpy
+easyocr
+pillow
+python-dotenv
+google-cloud-vision
+sentence-transformers
+faiss-cpu
