@@ -11,3 +11,5 @@ google-cloud-vision
 sentence-transformers
 faiss-cpu
 python-multipart
+python-jose
+passlib[bcrypt]

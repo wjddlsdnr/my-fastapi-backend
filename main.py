@@ -18,6 +18,16 @@ from semantic_search import (
     remove_faiss_ids,
 )
 from sentence_transformers import SentenceTransformer
+from fastapi import FastAPI, Depends, HTTPException, status
+from sqlalchemy.orm import Session
+from database import User, Base
+from sqlalchemy import create_engine
+from passlib.context import CryptContext
+from jose import jwt
+from pydantic import BaseModel
+
+SECRET_KEY = "wjddlsdnr8832"
+ALGORITHM = "HS256"
 
 model = SentenceTransformer("BAAI/bge-m3")
 Base.metadata.create_all(bind=engine)
@@ -37,6 +47,46 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+SECRET_KEY = "내_매우_강력한_비밀키"
+ALGORITHM = "HS256"
+pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
+engine = create_engine("sqlite:///./ocr_data.db")
+Base.metadata.create_all(bind=engine)
+
+class UserCreate(BaseModel):
+    username: str
+    password: str
+
+class UserOut(BaseModel):
+    id: int
+    username: str
+
+def get_password_hash(password):
+    return pwd_context.hash(password)
+
+def verify_password(plain_password, hashed_password):
+    return pwd_context.verify(plain_password, hashed_password)
+
+@app.post("/signup/", response_model=UserOut)
+def signup(user: UserCreate):
+    session = Session(bind=engine)
+    if session.query(User).filter(User.username == user.username).first():
+        raise HTTPException(status_code=400, detail="이미 가입된 아이디입니다")
+    db_user = User(username=user.username, hashed_password=get_password_hash(user.password))
+    session.add(db_user)
+    session.commit()
+    session.refresh(db_user)
+    return db_user
+
+@app.post("/login/")
+def login(user: UserCreate):
+    session = Session(bind=engine)
+    db_user = session.query(User).filter(User.username == user.username).first()
+    if not db_user or not verify_password(user.password, db_user.hashed_password):
+        raise HTTPException(status_code=401, detail="로그인 실패")
+    token = jwt.encode({"sub": user.username}, SECRET_KEY, algorithm=ALGORITHM)
+    return {"access_token": token, "token_type": "bearer"}
+
 def highlight_keyword(text: str, keyword: str) -> str:
     pattern = re.compile(re.escape(keyword), re.IGNORECASE)
     return pattern.sub(lambda m: f"<mark>{m.group(0)}</mark>", text)
@@ -47,6 +97,22 @@ def get_db():
         yield db
     finally:
         db.close()
+
+def get_current_user(
+    token: str = Header(...),  # 프론트에서 token 헤더로 JWT 보내야 함
+    db: Session = Depends(get_db)
+):
+    try:
+        payload = jwt.decode(token, SECRET_KEY, algorithms=[ALGORITHM])
+        username = payload.get("sub")
+        if username is None:
+            raise HTTPException(status_code=401, detail="인증 실패")
+        user = db.query(User).filter(User.username == username).first()
+        if not user:
+            raise HTTPException(status_code=401, detail="사용자 없음")
+        return user
+    except Exception:
+        raise HTTPException(status_code=401, detail="인증 실패")
 
 def split_into_sentences(text):
     if isinstance(text, list):
@@ -119,7 +185,11 @@ async def upload_image(file: UploadFile = File(...), db: Session = Depends(get_d
     except Exception as e:
         print("❌ 업로드 중 오류:", e)
         return {"error": str(e)}
+@app.get("/myinfo/")
+def get_myinfo(user: User = Depends(get_current_user)):
+    return {"username": user.username, "id": user.id}
 
+    
 @app.delete("/delete_image/{filename:path}")
 def delete_image(filename: str = Path(...), db: Session = Depends(get_db)):
     global faiss_index, indexed_texts, embeddings
