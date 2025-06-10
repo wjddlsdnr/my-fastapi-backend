@@ -20,12 +20,15 @@ from sentence_transformers import SentenceTransformer
 from passlib.context import CryptContext
 from jose import jwt
 from pydantic import BaseModel
-from fastapi.middleware.cors import CORSMiddleware
 
+# ====== 앱/DB ======
+app = FastAPI()  # 반드시 가장 위에서 선언!
+
+# ====== 미들웨어 (CORS) ======
 app.add_middleware(
     CORSMiddleware,
     allow_origins=[
-        "https://hopeful-education-production.up.railway.app",  # ← 프론트 railway 주소
+        "https://hopeful-education-production.up.railway.app",  # 프론트 railway 주소
         "http://localhost:5173",  # 개발용
     ],
     allow_credentials=True,
@@ -34,28 +37,16 @@ app.add_middleware(
 )
 
 # ====== 설정 ======
-SECRET_KEY = "wjddlsdnr8832"   # 실제 서비스 시 더 길고 랜덤하게!
+SECRET_KEY = "wjddlsdnr8832"
 ALGORITHM = "HS256"
 pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
-UPLOAD_DIR = "uploaded_images"   # 유저별 폴더로 업로드
+UPLOAD_DIR = "uploaded_images"
 
-# ====== 앱/DB ======
 Base.metadata.create_all(bind=engine)
-app = FastAPI()
+os.makedirs(UPLOAD_DIR, exist_ok=True)
 
-os.makedirs(UPLOAD_DIR, exist_ok=True)  # 업로드 루트 폴더가 없으면 생성
-
-# ====== 미들웨어 ======
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=[
-        "http://localhost:5173",  # 개발용
-        "https://your-frontend.onrender.com"  # 실제 배포용 프론트 주소로 변경
-    ],
-    allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
-)
+# ====== Static (이미지 파일 서빙) ======
+app.mount(f"/{UPLOAD_DIR}", StaticFiles(directory=UPLOAD_DIR), name=UPLOAD_DIR)
 
 # ====== Static (이미지 파일 서빙) ======
 app.mount(f"/{UPLOAD_DIR}", StaticFiles(directory=UPLOAD_DIR), name=UPLOAD_DIR)
@@ -95,6 +86,7 @@ def get_current_user(token: str = Header(...), db: Session = Depends(get_db)):
         return user
     except Exception:
         raise HTTPException(status_code=401, detail="인증 실패")
+
 
 # ====== 회원가입 & 로그인 ======
 @app.post("/signup/", response_model=UserOut)
