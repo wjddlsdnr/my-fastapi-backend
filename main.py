@@ -25,6 +25,7 @@ from sqlalchemy import create_engine
 from passlib.context import CryptContext
 from jose import jwt
 from pydantic import BaseModel
+from fastapi import Header
 
 SECRET_KEY = "wjddlsdnr8832"
 ALGORITHM = "HS256"
@@ -189,7 +190,7 @@ async def upload_image(file: UploadFile = File(...), db: Session = Depends(get_d
 def get_myinfo(user: User = Depends(get_current_user)):
     return {"username": user.username, "id": user.id}
 
-    
+
 @app.delete("/delete_image/{filename:path}")
 def delete_image(filename: str = Path(...), db: Session = Depends(get_db)):
     global faiss_index, indexed_texts, embeddings
