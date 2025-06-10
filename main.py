@@ -1,16 +1,15 @@
 import os
 import stat
 import re
-import models
 import numpy as np
-from fastapi import FastAPI, File, UploadFile, Depends, Query, HTTPException, Path, Request
+from fastapi import FastAPI, File, UploadFile, Depends, Query, HTTPException, Path, Request, Header
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from sqlalchemy.orm import Session
 from ocr import extract_text_from_image
-from database import SessionLocal, engine
-from models import Base, OCRSentence
+from database import SessionLocal, engine, User, Base
+from models import OCRSentence
 from semantic_search import (
     get_all_texts,
     build_faiss_index,
@@ -18,25 +17,23 @@ from semantic_search import (
     remove_faiss_ids,
 )
 from sentence_transformers import SentenceTransformer
-from fastapi import FastAPI, Depends, HTTPException, status
-from sqlalchemy.orm import Session
-from database import User, Base
-from sqlalchemy import create_engine
 from passlib.context import CryptContext
 from jose import jwt
 from pydantic import BaseModel
-from fastapi import Header
 
-SECRET_KEY = "wjddlsdnr8832"
+# ====== 설정 ======
+SECRET_KEY = "wjddlsdnr8832"   # 실제 서비스 시 더 길고 랜덤하게!
 ALGORITHM = "HS256"
+pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
+UPLOAD_DIR = "uploaded_images"   # 유저별 폴더로 업로드
 
-model = SentenceTransformer("BAAI/bge-m3")
+# ====== 앱/DB ======
 Base.metadata.create_all(bind=engine)
 app = FastAPI()
 
-UPLOAD_DIR = "uploads"
-os.makedirs(UPLOAD_DIR, exist_ok=True)
+os.makedirs(UPLOAD_DIR, exist_ok=True)  # 업로드 루트 폴더가 없으면 생성
 
+# ====== 미들웨어 ======
 app.add_middleware(
     CORSMiddleware,
     allow_origins=[
@@ -48,12 +45,10 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-SECRET_KEY = "내_매우_강력한_비밀키"
-ALGORITHM = "HS256"
-pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
-engine = create_engine("sqlite:///./ocr_data.db")
-Base.metadata.create_all(bind=engine)
+# ====== Static (이미지 파일 서빙) ======
+app.mount(f"/{UPLOAD_DIR}", StaticFiles(directory=UPLOAD_DIR), name=UPLOAD_DIR)
 
+# ====== 인증 모델 ======
 class UserCreate(BaseModel):
     username: str
     password: str
@@ -62,36 +57,6 @@ class UserOut(BaseModel):
     id: int
     username: str
 
-def get_password_hash(password):
-    return pwd_context.hash(password)
-
-def verify_password(plain_password, hashed_password):
-    return pwd_context.verify(plain_password, hashed_password)
-
-@app.post("/signup/", response_model=UserOut)
-def signup(user: UserCreate):
-    session = Session(bind=engine)
-    if session.query(User).filter(User.username == user.username).first():
-        raise HTTPException(status_code=400, detail="이미 가입된 아이디입니다")
-    db_user = User(username=user.username, hashed_password=get_password_hash(user.password))
-    session.add(db_user)
-    session.commit()
-    session.refresh(db_user)
-    return db_user
-
-@app.post("/login/")
-def login(user: UserCreate):
-    session = Session(bind=engine)
-    db_user = session.query(User).filter(User.username == user.username).first()
-    if not db_user or not verify_password(user.password, db_user.hashed_password):
-        raise HTTPException(status_code=401, detail="로그인 실패")
-    token = jwt.encode({"sub": user.username}, SECRET_KEY, algorithm=ALGORITHM)
-    return {"access_token": token, "token_type": "bearer"}
-
-def highlight_keyword(text: str, keyword: str) -> str:
-    pattern = re.compile(re.escape(keyword), re.IGNORECASE)
-    return pattern.sub(lambda m: f"<mark>{m.group(0)}</mark>", text)
-
 def get_db():
     db = SessionLocal()
     try:
@@ -99,10 +64,14 @@ def get_db():
     finally:
         db.close()
 
-def get_current_user(
-    token: str = Header(...),  # 프론트에서 token 헤더로 JWT 보내야 함
-    db: Session = Depends(get_db)
-):
+def get_password_hash(password):
+    return pwd_context.hash(password)
+
+def verify_password(plain_password, hashed_password):
+    return pwd_context.verify(plain_password, hashed_password)
+
+# ====== JWT 토큰 인증 유저 확인 ======
+def get_current_user(token: str = Header(...), db: Session = Depends(get_db)):
     try:
         payload = jwt.decode(token, SECRET_KEY, algorithms=[ALGORITHM])
         username = payload.get("sub")
@@ -115,6 +84,26 @@ def get_current_user(
     except Exception:
         raise HTTPException(status_code=401, detail="인증 실패")
 
+# ====== 회원가입 & 로그인 ======
+@app.post("/signup/", response_model=UserOut)
+def signup(user: UserCreate, db: Session = Depends(get_db)):
+    if db.query(User).filter(User.username == user.username).first():
+        raise HTTPException(status_code=400, detail="이미 가입된 아이디입니다")
+    db_user = User(username=user.username, hashed_password=get_password_hash(user.password))
+    db.add(db_user)
+    db.commit()
+    db.refresh(db_user)
+    return db_user
+
+@app.post("/login/")
+def login(user: UserCreate, db: Session = Depends(get_db)):
+    db_user = db.query(User).filter(User.username == user.username).first()
+    if not db_user or not verify_password(user.password, db_user.hashed_password):
+        raise HTTPException(status_code=401, detail="로그인 실패")
+    token = jwt.encode({"sub": user.username}, SECRET_KEY, algorithm=ALGORITHM)
+    return {"access_token": token, "token_type": "bearer"}
+
+# ====== 문장 분리 ======
 def split_into_sentences(text):
     if isinstance(text, list):
         parts = text
@@ -122,39 +111,50 @@ def split_into_sentences(text):
         parts = re.split(r'[.\n]', text)
     return [s.strip() for s in parts if len(s.strip()) > 1]
 
+def highlight_keyword(text: str, keyword: str) -> str:
+    pattern = re.compile(re.escape(keyword), re.IGNORECASE)
+    return pattern.sub(lambda m: f"<mark>{m.group(0)}</mark>", text)
+
+# ====== FAISS (검색 인덱스) ======
+model = SentenceTransformer("BAAI/bge-m3")
 faiss_index = None
 indexed_texts = []
 embeddings = []
 
+@app.on_event("startup")
+def load_faiss_index():
+    global faiss_index, indexed_texts, embeddings
+    texts = get_all_texts()
+    faiss_index, indexed_texts, embeddings = build_faiss_index(texts)
+    print("✅ 서버 시작 시 FAISS 인덱스 자동 초기화 완료, 문장 개수:", len(indexed_texts))
+
+# ====== 내 정보 확인 ======
+@app.get("/myinfo/")
+def get_myinfo(user: User = Depends(get_current_user)):
+    return {"username": user.username, "id": user.id}
+
+# ====== 파일 업로드 (유저별 저장) ======
 @app.post("/upload/")
-async def upload_image(file: UploadFile = File(...), db: Session = Depends(get_db)):
+async def upload_image(file: UploadFile = File(...), user: User = Depends(get_current_user), db: Session = Depends(get_db)):
     global faiss_index, indexed_texts, embeddings
     try:
         contents = await file.read()
-        save_path = os.path.join(UPLOAD_DIR, file.filename)
+        user_folder = os.path.join(UPLOAD_DIR, user.username)
+        os.makedirs(user_folder, exist_ok=True)
+        save_path = os.path.join(user_folder, file.filename)
         with open(save_path, "wb") as f:
             f.write(contents)
         raw_result = extract_text_from_image(contents)
-        print("📦 OCR 결과 (원본):", raw_result)
-
         if isinstance(raw_result, list) and isinstance(raw_result[0], tuple):
             text_list = [item[1] for item in raw_result]
         else:
             text_list = raw_result
-
         text = " ".join(text_list)
-        print("🧩 변환된 문장형 텍스트:", text)
-
         sentences = split_into_sentences(text)
-        print("✂️ 분리된 문장 수:", len(sentences))
-        print("✂️ 분리된 문장 목록:", sentences)
-
         if not sentences:
             return {"message": "문장이 추출되지 않음", "uploaded": file.filename}
-
         texts = get_all_texts()
         faiss_index, indexed_texts, embeddings = build_faiss_index(texts)
-
         current_vector_id = faiss_index.ntotal if faiss_index else 0
         vectors, ids = [], []
         for s in sentences:
@@ -167,38 +167,53 @@ async def upload_image(file: UploadFile = File(...), db: Session = Depends(get_d
             vectors.append(embedding)
             ids.append(current_vector_id)
             current_vector_id += 1
-
         db.commit()
-        print(f"✅ 총 {len(sentences)}개 문장 저장 완료")
-
         texts = get_all_texts()
         faiss_index, indexed_texts, embeddings = build_faiss_index(texts)
-        print("✅ FAISS 인덱스 전체 재구축 완료")
-        print("🧠 현재 인덱스 상태: 벡터 수", faiss_index.ntotal)
-
         return {
             "uploaded": file.filename,
             "num_sentences": len(sentences),
             "preview": sentences[:3],
-            "image_path": f"uploads/{file.filename}",
+            "image_path": f"{user_folder}/{file.filename}",
         }
-
     except Exception as e:
         print("❌ 업로드 중 오류:", e)
         return {"error": str(e)}
-@app.get("/myinfo/")
-def get_myinfo(user: User = Depends(get_current_user)):
-    return {"username": user.username, "id": user.id}
 
+# ====== 내 사진(갤러리) ======
+@app.get("/my_images/")
+def my_images(user: User = Depends(get_current_user)):
+    user_folder = os.path.join(UPLOAD_DIR, user.username)
+    if not os.path.exists(user_folder):
+        return {"images": []}
+    files = [
+        f"{UPLOAD_DIR}/{user.username}/{fname}"
+        for fname in os.listdir(user_folder)
+        if fname.lower().endswith(('.png', '.jpg', '.jpeg', '.gif'))
+    ]
+    return {"images": files}
 
+# ====== 이미지 전체 리스트 (관리자/테스트용, 유저별 분리X) ======
+@app.get("/images/")
+def get_image_list():
+    files = []
+    for root, dirs, filenames in os.walk(UPLOAD_DIR):
+        for fname in filenames:
+            if fname.lower().endswith(('.png', '.jpg', '.jpeg', '.gif')):
+                rel_path = os.path.relpath(os.path.join(root, fname), ".")
+                files.append(rel_path.replace("\\", "/"))
+    return {"images": files}
+
+# ====== 이미지 삭제 (유저 본인만) ======
 @app.delete("/delete_image/{filename:path}")
-def delete_image(filename: str = Path(...), db: Session = Depends(get_db)):
+def delete_image(filename: str = Path(...), user: User = Depends(get_current_user), db: Session = Depends(get_db)):
     global faiss_index, indexed_texts, embeddings
+    # 보안: 경로 공격 막기
     safe_filename = os.path.basename(filename)
-    file_path = os.path.join(UPLOAD_DIR, safe_filename)
+    user_folder = os.path.join(UPLOAD_DIR, user.username)
+    file_path = os.path.join(user_folder, safe_filename)
     if not os.path.exists(file_path):
         raise HTTPException(status_code=404, detail="이미지 파일이 존재하지 않습니다.")
-
     try:
         os.chmod(file_path, stat.S_IWRITE)
         os.remove(file_path)
@@ -218,12 +233,12 @@ def delete_image(filename: str = Path(...), db: Session = Depends(get_db)):
         print("❌ 이미지 삭제 중 오류:", e)
         raise HTTPException(status_code=500, detail=f"삭제 실패: {str(e)}")
 
+# ====== 문맥 검색 ======
 @app.get("/semantic_search/")
 def semantic_search_api(query: str):
     global faiss_index, indexed_texts, embeddings
     if faiss_index is None or not indexed_texts:
         return {"error": "FAISS 인덱스가 초기화되지 않았거나 문장이 없음"}
-
     try:
         query_vec = model.encode([query], convert_to_numpy=True, normalize_embeddings=True)
         if query_vec.ndim == 1:
@@ -255,15 +270,8 @@ def semantic_search_api(query: str):
     except Exception as e:
         print("❌ 문맥 검색 중 오류:", e)
         return {"error": str(e)}
-@app.get("/images/")
-def get_image_list():
-    image_folder = "uploaded_images"  # 실제 업로드 폴더 경로 맞게 수정
-    files = []
-    for fname in os.listdir(image_folder):
-        if fname.lower().endswith(('.png', '.jpg', '.jpeg', '.gif')):
-            files.append(f"{image_folder}/{fname}")
-    return {"images": files}
-    
+
+# ====== 이미지 하이라이트 (OCR+CV) ======
 @app.post("/highlighted_image/")
 async def highlight_image(request: Request):
     data = await request.json()
@@ -282,10 +290,8 @@ async def highlight_image(request: Request):
         return {"error": "이미지를 읽는 데 실패했습니다."}
     reader = easyocr.Reader(['ko', 'en'])
     results = reader.readtext(image)
-    found = False
     for (bbox, text, conf) in results:
         if keyword.lower() in text.lower():
-            found = True
             top_left = tuple(map(int, bbox[0]))
             bottom_right = tuple(map(int, bbox[2]))
             cv2.rectangle(image, top_left, bottom_right, (0, 0, 255), 3)
@@ -294,12 +300,3 @@ async def highlight_image(request: Request):
     _, buffer = cv2.imencode('.png', image)
     io_buf = BytesIO(buffer)
     return StreamingResponse(io_buf, media_type="image/png")
-
-@app.on_event("startup")
-def load_faiss_index():
-    global faiss_index, indexed_texts, embeddings
-    texts = get_all_texts()
-    faiss_index, indexed_texts, embeddings = build_faiss_index(texts)
-    print("✅ 서버 시작 시 FAISS 인덱스 자동 초기화 완료, 문장 개수:", len(indexed_texts))
-
-app.mount("/uploads", StaticFiles(directory="uploads"), name="uploads")
