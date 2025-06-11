@@ -57,9 +57,10 @@ UserSessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=USER_ENG
 def get_user_db(username: str):
     db_path = f"./ocr_data_{username}.db"
     engine = create_engine(f"sqlite:///{db_path}")
-    Base.metadata.create_all(bind=engine)
+    Base.metadata.create_all(bind=engine)  # 테이블 보장!
     SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
     return SessionLocal()
+
 
 # ====== 인증 모델 ======
 class UserCreate(BaseModel):
