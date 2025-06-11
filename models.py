@@ -2,7 +2,7 @@ from sqlalchemy import Column, Integer, String, DateTime
 from sqlalchemy.orm import declarative_base
 from datetime import datetime
 
-Base.metadata.create_all(bind=engine) 
+Base = declarative_base()
 
 class OCRSentence(Base):
     __tablename__ = "ocr_sentences"

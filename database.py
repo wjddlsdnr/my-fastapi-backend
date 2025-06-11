@@ -5,8 +5,7 @@ from models import Base
 # database.py에 추가
 from sqlalchemy import Column, Integer, String
 from sqlalchemy.ext.declarative import declarative_base
-
-Base.metadata.create_all(bind=engine) 
+from models import Base, User, OCRSentence
 
 class User(Base):
     __tablename__ = "users"
