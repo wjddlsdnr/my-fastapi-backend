@@ -213,16 +213,17 @@ def get_image_list():
 @app.delete("/delete_image/{filename:path}")
 def delete_image(filename: str = Path(...), user: User = Depends(get_current_user), db: Session = Depends(get_db)):
     global faiss_index, indexed_texts, embeddings
-    # 보안: 경로 공격 막기
-    safe_filename = os.path.basename(filename)
-    user_folder = os.path.join(UPLOAD_DIR, user.username)
-    file_path = os.path.join(user_folder, safe_filename)
+    # 안전한 경로 생성 (URL 경로 그대로 DB 경로에 맞춰서)
+    image_rel_path = f"{UPLOAD_DIR}/{user.username}/{filename}"
+    file_path = os.path.join(UPLOAD_DIR, user.username, filename)
     if not os.path.exists(file_path):
         raise HTTPException(status_code=404, detail="이미지 파일이 존재하지 않습니다.")
+
     try:
         os.chmod(file_path, stat.S_IWRITE)
         os.remove(file_path)
-        sentences_to_delete = db.query(OCRSentence).filter(OCRSentence.image_path == file_path).all()
+        # DB에서 정확히 일치하는 image_path 값만 삭제
+        sentences_to_delete = db.query(OCRSentence).filter(OCRSentence.image_path == image_rel_path).all()
         faiss_ids = [s.faiss_id for s in sentences_to_delete]
         remove_faiss_ids(faiss_index, faiss_ids)
         for s in sentences_to_delete:
@@ -237,6 +238,8 @@ def delete_image(filename: str = Path(...), user: User = Depends(get_current_use
         traceback.print_exc()
         print("❌ 이미지 삭제 중 오류:", e)
         raise HTTPException(status_code=500, detail=f"삭제 실패: {str(e)}")
+
+
 
 # ====== 문맥 검색 ======
 @app.get("/semantic_search/")
