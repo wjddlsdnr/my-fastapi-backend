@@ -6,27 +6,21 @@ from fastapi import FastAPI, File, UploadFile, Depends, Query, HTTPException, Pa
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
-from sqlalchemy.orm import sessionmaker, Session
-from sqlalchemy import create_engine
-from ocr import extract_text_from_image
-from database import User, Base
-from models import OCRSentence
-from semantic_search import (
-    get_all_texts,
-    build_faiss_index,
-    get_text_embedding,
-    remove_faiss_ids,
-)
+
+# 모델은 오로지 models.py에서!
+from models import Base, User, OCRSentence
+
+# 세션 등은 database.py에서
+from database import UserSessionLocal, get_user_db
+
 from sentence_transformers import SentenceTransformer
 from passlib.context import CryptContext
 from jose import jwt
 from pydantic import BaseModel
-from passlib.context import CryptContext
+from ocr import extract_text_from_image
 
-# ====== 앱 ======
 app = FastAPI()
 
-# ====== 미들웨어 (CORS) ======
 app.add_middleware(
     CORSMiddleware,
     allow_origins=[
@@ -38,32 +32,15 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# ====== 설정 ======
 SECRET_KEY = "wjddlsdnr8832"
 ALGORITHM = "HS256"
 pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
 UPLOAD_DIR = "uploaded_images"
 os.makedirs(UPLOAD_DIR, exist_ok=True)
 
-# ====== Static (이미지 파일 서빙) ======
 app.mount("/uploaded_images", StaticFiles(directory="uploaded_images"), name="uploaded_images")
 
-# ====== 공용 회원 DB (user 관리만 이 DB에) ======
-USER_DB_PATH = "./user.db"
-USER_ENGINE = create_engine(f"sqlite:///{USER_DB_PATH}")
-Base.metadata.create_all(bind=USER_ENGINE)
-UserSessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=USER_ENGINE)
-
-# ====== 유저별 DB 생성 및 세션 헬퍼 ======
-def get_user_db(username: str):
-    db_path = f"./ocr_data_{username}.db"
-    engine = create_engine(f"sqlite:///{db_path}")
-    Base.metadata.create_all(bind=engine)  # 테이블 보장!
-    SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
-    return SessionLocal()
-
-
-# ====== 인증 모델 ======
+# --- 인증 모델 등 ---
 class UserCreate(BaseModel):
     username: str
     password: str
@@ -85,7 +62,6 @@ def get_password_hash(password):
 def verify_password(plain_password, hashed_password):
     return pwd_context.verify(plain_password, hashed_password)
 
-# ====== JWT 토큰 인증 유저 확인 ======
 def get_current_user(token: str = Header(...), db: Session = Depends(get_user_session)):
     try:
         payload = jwt.decode(token, SECRET_KEY, algorithms=[ALGORITHM])
@@ -99,7 +75,6 @@ def get_current_user(token: str = Header(...), db: Session = Depends(get_user_se
     except Exception:
         raise HTTPException(status_code=401, detail="인증 실패")
 
-# ====== 회원가입 & 로그인 (공용 DB) ======
 @app.post("/signup/", response_model=UserOut)
 def signup(user: UserCreate, db: Session = Depends(get_user_session)):
     if db.query(User).filter(User.username == user.username).first():
@@ -117,6 +92,11 @@ def login(user: UserCreate, db: Session = Depends(get_user_session)):
         raise HTTPException(status_code=401, detail="로그인 실패")
     token = jwt.encode({"sub": user.username}, SECRET_KEY, algorithm=ALGORITHM)
     return {"access_token": token, "token_type": "bearer"}
+
+# ... 이하 기존 라우터 그대로 복붙 ...
+
+# 예시: 업로드, 내 사진, 삭제, 검색 등등
+
 
 # ====== 문장 분리 ======
 def split_into_sentences(text):

@@ -1,7 +1,9 @@
 import os
 from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
-from models import Base
+from models import Base, User, OCRSentence
+# 이하 엔진, 세션 생성 코드만
+
 
 # 공용 회원 DB
 USER_DB_PATH = "./user.db"
