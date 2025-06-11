@@ -6,7 +6,7 @@ from models import Base
 from sqlalchemy import Column, Integer, String
 from sqlalchemy.ext.declarative import declarative_base
 
-Base = declarative_base()
+Base.metadata.create_all(bind=engine) 
 
 class User(Base):
     __tablename__ = "users"
