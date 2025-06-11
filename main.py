@@ -1,16 +1,28 @@
-from fastapi import FastAPI, Depends, HTTPException, File, UploadFile, Path, Header, Request
+import os
+import stat
+import re
+import numpy as np
+from fastapi import FastAPI, File, UploadFile, Depends, Query, HTTPException, Path, Request, Header
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import JSONResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
-import os, stat, re, numpy as np
-
-from database import UserSessionLocal, get_user_db
-from models import Base, User, OCRSentence
-
+from sqlalchemy.orm import sessionmaker, Session
 from sqlalchemy import create_engine
+from ocr import extract_text_from_image
+from database import User, Base
+from models import OCRSentence
+from semantic_search import (
+    get_all_texts,
+    build_faiss_index,
+    get_text_embedding,
+    remove_faiss_ids,
+)
+from sentence_transformers import SentenceTransformer
+from passlib.context import CryptContext
+from jose import jwt
+from pydantic import BaseModel
+from passlib.context import CryptContext
 
-# DB 테이블은 여기서 한 번만 생성!
-engine = create_engine("sqlite:///./user.db")
-Base.metadata.create_all(bind=engine)
 # ====== 앱 ======
 app = FastAPI()
 
