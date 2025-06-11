@@ -148,6 +148,7 @@ async def upload_image(file: UploadFile = File(...), user: User = Depends(get_cu
         save_path = os.path.join(user_folder, file.filename)
         with open(save_path, "wb") as f:
             f.write(contents)
+        image_rel_path = f"{UPLOAD_DIR}/{user.username}/{file.filename}"
         raw_result = extract_text_from_image(contents)
         if isinstance(raw_result, list) and isinstance(raw_result[0], tuple):
             text_list = [item[1] for item in raw_result]
@@ -163,7 +164,7 @@ async def upload_image(file: UploadFile = File(...), user: User = Depends(get_cu
         vectors, ids = [], []
         for s in sentences:
             db.add(OCRSentence(
-                image_path=save_path,
+                image_path=image_rel_path,
                 sentence=s,
                 faiss_id=current_vector_id
             ))
