@@ -6,7 +6,7 @@ from fastapi import FastAPI, File, UploadFile, Depends, Query, HTTPException, Pa
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
-
+from sqlalchemy.orm import Session
 # 모델은 오로지 models.py에서!
 from models import Base, User, OCRSentence
 
@@ -61,8 +61,13 @@ def get_password_hash(password):
 
 def verify_password(plain_password, hashed_password):
     return pwd_context.verify(plain_password, hashed_password)
-
-def get_current_user(token: str = Header(...), db: Session = Depends(get_user_session)):
+def get_db():
+    db = SessionLocal()
+    try:
+        yield db
+    finally:
+        db.close()
+def get_current_user(token: str = Header(...), db: Session = Depends(get_db)):  # ← Depends(get_db)로
     try:
         payload = jwt.decode(token, SECRET_KEY, algorithms=[ALGORITHM])
         username = payload.get("sub")
