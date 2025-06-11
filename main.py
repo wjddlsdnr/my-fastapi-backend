@@ -20,6 +20,7 @@ from sentence_transformers import SentenceTransformer
 from passlib.context import CryptContext
 from jose import jwt
 from pydantic import BaseModel
+from fastapi.staticfiles import StaticFiles
 
 # ====== 앱/DB ======
 app = FastAPI()  # 반드시 가장 위에서 선언!
@@ -46,10 +47,9 @@ Base.metadata.create_all(bind=engine)
 os.makedirs(UPLOAD_DIR, exist_ok=True)
 
 # ====== Static (이미지 파일 서빙) ======
-app.mount(f"/{UPLOAD_DIR}", StaticFiles(directory=UPLOAD_DIR), name=UPLOAD_DIR)
+app.mount("/uploaded_images", StaticFiles(directory="uploaded_images"), name="uploaded_images")
 
-# ====== Static (이미지 파일 서빙) ======
-app.mount(f"/{UPLOAD_DIR}", StaticFiles(directory=UPLOAD_DIR), name=UPLOAD_DIR)
+
 
 # ====== 인증 모델 ======
 class UserCreate(BaseModel):
